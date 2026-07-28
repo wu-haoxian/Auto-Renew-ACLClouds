@@ -1,8 +1,10 @@
-name: Auto-Renew-ACL
+name: Auto-Renew-ACLClouds
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 1 2/3 * *' # 每隔3天 12点(UTC 2点) 运行
+    # 每天 UTC 0:50（北京时间 8:50）触发，由脚本判断是否执行
+    - cron: '50 0 * * *'
 
 jobs:
   Renew-acl:
@@ -11,15 +13,38 @@ jobs:
     permissions:
       contents: write
       actions: write
+
     steps:
+      # 1. 下载代码
       - name: 📥 下载代码
         uses: actions/checkout@v6
+
+      # 2. 日期检查（决定今天是否执行）
+      - name: Check interval
+        id: check
+        run: |
+          START="2026-07-31"
+          TODAY=$(date -u +%F)
+          start_sec=$(date -d "$START" +%s)
+          today_sec=$(date -d "$TODAY" +%s)
+          days=$(( (today_sec - start_sec) / 86400 ))
+          echo "Days since $START: $days"
+          if (( days % 4 == 0 )); then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 3. 设置 Python（仅在满足条件时运行）
       - name: 🐍 设置 Python
+        if: steps.check.outputs.should_run == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-          
+
+      # 4. 安装系统依赖（仅在满足条件时运行）
       - name: 🛠️ 安装系统依赖
+        if: steps.check.outputs.should_run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -28,30 +53,37 @@ jobs:
             xdotool \
             scrot \
             fonts-noto-cjk
-            
+
+      # 5. 安装 Python 依赖（仅在满足条件时运行）
       - name: 🐍 安装 Python 依赖
+        if: steps.check.outputs.should_run == 'true'
         run: |
           pip install seleniumbase aiohttp requests
           seleniumbase install chromedriver
 
+      # 6. 设置 sing-box 代理转发（仅在满足条件时运行，且允许失败）
       - name: 🌐 设置sing-box代理转发
+        if: steps.check.outputs.should_run == 'true'
         continue-on-error: true
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
-          
+
+      # 7. 运行续期脚本（仅在满足条件时运行）
       - name: 🚀 运行续期脚本
+        if: steps.check.outputs.should_run == 'true'
         env:
-          EMAIL: ${{ secrets.EMAIL }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-          COOKIE_VALUE: ${{ secrets.COOKIE_VALUE }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          EMAIL:         ${{ secrets.EMAIL }}
+          PASSWORD:      ${{ secrets.PASSWORD }}
+          COOKIE_VALUE:  ${{ secrets.COOKIE_VALUE }}
+          TG_BOT_TOKEN:  ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:    ${{ secrets.TG_CHAT_ID }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" \
             python3 app.py
-          
+
+      # 8. 清理旧的工作流运行记录（每次运行都执行）
       - name: 🧹 清理旧的工作流运行记录
         if: always()
         env:
